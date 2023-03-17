@@ -153,19 +153,20 @@ function BrightnessControl(set) {
 
 function ddcWriteInQueue(settings, display_bus){
     if(writeCollection[display_bus].interval == null){
-        writeCollection[display_bus].interval = Convenience.setInterval(()=>{
-            if(writeCollection[display_bus].countdown == 0){
+        writeCollection[display_bus].writer();
+        const writeCollectorWaitMs = parseInt(settings.get_double('ddcutil-queue-ms'))
+        writeCollection[display_bus].interval = Convenience.setTimeout(()=>{
+            //if(writeCollection[display_bus].countdown == 0){
                 brightnessLog(`Write in queue countdown over for ${display_bus}`);
                 writeCollection[display_bus].writer();
                 Convenience.clearInterval(writeCollection[display_bus].interval);
                 writeCollection[display_bus].interval = null;
-                const writeCollectorWaitMs = parseInt(settings.get_double('ddcutil-queue-ms'))
-                writeCollection[display_bus].countdown = writeCollectorWaitMs;
+                //writeCollection[display_bus].countdown = writeCollectorWaitMs;
 
-            }else{
-                writeCollection[display_bus].countdown = writeCollection[display_bus].countdown - 1;
-            }
-        }, 1);
+            //}else{
+                //writeCollection[display_bus].countdown = writeCollection[display_bus].countdown - 1;
+            //}
+        }, writeCollectorWaitMs);
     }
 }
 function ddcWriteCollector(settings, display_bus, writer){
@@ -173,10 +174,12 @@ function ddcWriteCollector(settings, display_bus, writer){
         /* by setting writer to latest one, 
         when waiting is over latest writer will run */
         writeCollection[display_bus].writer = writer;
-        brightnessLog(`Write collector update, current countdown is ${writeCollection[display_bus].countdown} for ${display_bus}`);
+        //brightnessLog(`Write collector update, current countdown is ${writeCollection[display_bus].countdown} for ${display_bus}`);
+        brightnessLog(`Write collector update, current timer ref is ${writeCollection[display_bus].interval} for ${display_bus}`);
         /* countdown is over, meaning update process for this display can be added to the queue */
         const writeCollectorWaitMs = parseInt(settings.get_double('ddcutil-queue-ms'))
-        if(writeCollection[display_bus].countdown == writeCollectorWaitMs){
+        //if(writeCollection[display_bus].countdown == writeCollectorWaitMs){
+        if(writeCollection[display_bus].interval === null){
             brightnessLog(`Write collector update, trigger queue again`);
             ddcWriteInQueue(settings, display_bus);
         }
