@@ -83,6 +83,49 @@ const OBJECT_PATH = '/org/gnome/SettingsDaemon/Power';
 const BrightnessInterface = loadInterfaceXML('org.gnome.SettingsDaemon.Power.Screen');
 const BrightnessProxy = Gio.DBusProxy.makeProxyWrapper(BrightnessInterface);
 
+const DDC_BUS_NAME = 'ddccontrol.DDCControl';
+const DDC_OBJECT_PATH = '/ddccontrol/DDCControl';
+const DDCInterface = `<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+  <interface name="ddccontrol.DDCControl">
+    <method name="GetMonitors">
+      <arg name="devices"    type="as"   direction="out" />
+      <arg name="supported"  type="a(y)" direction="out" />
+      <arg name="names"      type="as"   direction="out" />
+      <arg name="digital"    type="a(y)"   direction="out" />
+    </method>
+    <method name="RescanMonitors">
+      <arg name="devices"    type="as"   direction="out" />
+      <arg name="supported"  type="a(y)" direction="out" />
+      <arg name="names"      type="as"   direction="out" />
+      <arg name="digital"    type="a(y)"   direction="out" />
+    </method>
+    <method name="OpenMonitor">
+      <arg name="device"  type="s" direction="in"  />
+      <arg name="pnpid"   type="s" direction="out" />
+      <arg name="caps"    type="s" direction="out" />
+    </method>
+    <method name="GetControl">
+      <arg name="device"  type="s" direction="in"  />
+      <arg name="control" type="u" direction="in"  />
+      <arg name="result"  type="i" direction="out" />
+      <arg name="value"   type="q" direction="out" />
+      <arg name="maximum" type="q" direction="out" />
+    </method>
+    <method name="SetControl">
+      <arg name="device"  type="s" direction="in"  />
+      <arg name="control" type="u" direction="in"  />
+      <arg name="value"   type="u" direction="in"  />
+    </method>
+    <signal name="ControlChanged">
+      <arg name="device"  type="s" direction="out"  />
+      <arg name="control" type="u" direction="out"  />
+      <arg name="value"   type="u" direction="out"  />
+    </signal>
+  </interface>
+</node>`;
+
+const DDCProxy = Gio.DBusProxy.makeProxyWrapper(DDCInterface);
+
 export default class DDCUtilBrightnessControlExtension extends Extension {
     enable() {
         this.settings = this.getSettings();
@@ -204,6 +247,16 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
         if (newBrightness === 0) {
             if (!this.settings.get_boolean('allow-zero-brightness'))
                 newBrightness = minBrightness;
+        }
+        if (this.settings.get_boolean('use-dbus') && this.proxy) {
+            this.proxy.SetControlRemote(`dev:/dev/i2c-${display.bus}`, 16, newBrightness, (returnValue, errorObj) => {
+                if (errorObj === null) {
+                    brightnessLog(this.settings, `SetControl(dev:/dev/i2c-${display.bus}, 16, ${newBrightness}): ${returnValue}`);
+                } else {
+                    brightnessLog(this.settings, errorObj);
+                }
+            });
+            return;
         }
         const ddcutilPath = this.settings.get_string('ddcutil-binary-path');
         const ddcutilAdditionalArgs = this.settings.get_string('ddcutil-additional-args');
@@ -343,10 +396,16 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
     }
 
     addDisplayToPanel(display) {
-        const onSliderChange = (quickSettingsSlider, newValue) => {
+        const _onSliderChange = (quickSettingsSlider, newValue) => {
             this.setBrightness(display, newValue);
             this.syncAllSlider();
         };
+        if (this.settings.get_boolean('use-dbus')) {
+            const onSliderChange = debounce(_onSliderChange)
+        } else {
+            const onSliderChange = _onSliderChange
+        }
+
         let displaySlider = null;
         if (this.settings.get_int('button-location') === 0) {
             displaySlider = new SingleMonitorSliderAndValueForStatusAreaMenu(this.settings, display.name, display.current, onSliderChange);
@@ -595,6 +654,15 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
         }
     }
 
+    createDBusProxy() {
+        this.proxy = new DDCProxy(Gio.DBus.system, DDC_BUS_NAME, DDC_OBJECT_PATH,
+            (proxy, error) => {
+                if (error)
+                    console.error(error.message);
+            });
+        brightnessLog(this.settings, "Created DBus proxy")
+    }
+
     getDisplaysInfoAsync() {
         const ddcutilPath = this.settings.get_string('ddcutil-binary-path');
         spawnWithCallback(this.settings, [ddcutilPath, 'detect', '--brief'], stdout => {
@@ -726,6 +794,9 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
 
     addAllDisplaysToPanel() {
         try {
+            if (this.settings.get_boolean('use-dbus') && DDCProxy) {
+                this.createDBusProxy();
+            }
             if (GLib.file_test(ddcutilDetectCacheFile, GLib.FileTest.IS_REGULAR))
                 this.getCachedDisplayInfoAsync();
             else
@@ -768,4 +839,12 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
         Main.wm.removeKeybinding('increase-brightness-shortcut');
         Main.wm.removeKeybinding('decrease-brightness-shortcut');
     }
+}
+
+function debounce(func, timeout = 100) {
+    let timer;
+    return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { func.apply(this, args); }, timeout);
+    };
 }
